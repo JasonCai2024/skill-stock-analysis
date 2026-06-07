@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# TradingAgents outputs — generated at runtime
+reports/
+data/
+memory/
+*.log
+
+# OS clutter
+.DS_Store
+Thumbs.db
+
+# Local overrides (credentials, not committed)
+.env
+.env.local
+.env.enterprise
