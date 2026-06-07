@@ -17,3 +17,8 @@ Thumbs.db
 .env
 .env.local
 .env.enterprise
+
+# Debug / scratch scripts
+test_*.py
+/tmp/
+*_test.py

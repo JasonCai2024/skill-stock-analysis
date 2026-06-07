@@ -44,7 +44,11 @@ Do not ask the user to edit any files. All configuration is done through the con
 ## Required Inputs
 
 1. **Stock identifier** — either a Chinese company name or a Tushare ticker code.
-2. **Python environment** — requires `E:\Python312_new\python.exe` with required dependencies installed.
+2. **Python environment** — Python 3.11+ with the dependencies in `requirements.txt` installed.
+
+> **How to find the correct Python on Windows**: run `where python` in PowerShell, or `import sys; print(sys.executable)` in any Python REPL. The skill does NOT hard-code a specific Python install path; pass the interpreter explicitly when running the wrapper.
+
+> **First-time setup**: `pip install -r <skill-root>/requirements.txt` once. This installs langgraph, langchain-core, tushare, akshare, yfinance, etc. in the verified set the skill was tested against.
 
 ## Workflow
 
@@ -73,10 +77,14 @@ os.environ["SERVICETUBER_PASSTOKEN"] = "<from user>"
 os.environ["TRADINGAGENTS_LLM_PROVIDER"] = "servicehub"
 ```
 
-Then execute the wrapper script (the subprocess inherits the env vars above):
+Then execute the wrapper script using whichever Python the user has:
 
-```
-E:\Python312_new\python.exe "<skill-root>\scripts\run_analysis.py" "<ticker-or-company-name>"
+```python
+import sys
+subprocess.run(
+    [sys.executable, "<skill-root>/scripts/run_analysis.py", "<ticker-or-company-name>"],
+    check=True,
+)
 ```
 
 The wrapper script:
@@ -108,7 +116,8 @@ Read the saved JSON and present a clean Chinese summary covering:
 Return a clean Chinese report including:
 
 - Company name and ticker
-- Date of analysis
+- **`data_as_of`** — the actual cutoff date of the underlying data (read from the JSON's `trade_date` / `date` fields; do NOT trust any date the LLM invents in its prose)
+- `report_date` — today, when this analysis was run
 - Each analyst's conclusion
 - Final recommendation: BUY / SELL / HOLD
 - Target price (CNY)
@@ -117,20 +126,23 @@ Return a clean Chinese report including:
 - Re-evaluation triggers
 - Path to the saved JSON report
 
+> **Why `data_as_of` matters**: TradingAgents may query data with a delay (latest business day, or last few weeks if a holiday), and the LLM can fabricate dates in its narrative. Always cross-reference with the JSON's `trade_date` and surface it explicitly so the user can see what data the report is actually based on.
+
 ## Fallback
 
 If the wrapper script is unavailable, set env vars and run directly:
 
 ```python
-import os
+import os, sys
 os.environ["SERVICETUBER_BASE_URL"] = "https://www.ccailab.top"
 os.environ["SERVICETUBER_USERNAME"] = "<ask user>"
 os.environ["SERVICETUBER_PASSTOKEN"] = "<ask user>"
+os.environ["TRADINGAGENTS_LLM_PROVIDER"] = "servicehub"
 ```
 
-```bash
-cd <skill-root>
-E:\Python312_new\python.exe main.py <ticker>
+```python
+import subprocess
+subprocess.run([sys.executable, "<skill-root>/main.py", "<ticker>"], check=True)
 ```
 
 The report is saved at:

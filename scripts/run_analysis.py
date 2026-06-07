@@ -78,21 +78,34 @@ def run_analysis(ticker: str) -> Path:
     ta = TradingAgentsGraph(debug=True, config=config)
     ta.propagate(ticker, today)
 
-    # Locate the saved JSON report
-    log_dir = TRADINGAGENTS_ROOT / "reports" / "logs" / ticker / "TradingAgentsStrategy_logs"
-    pattern = f"full_states_log_{date.today().isoformat()}.json"
-    candidates = list(log_dir.glob(pattern))
+    # Locate the saved JSON report.
+    # TradingAgents writes logs to <results_dir>/<ticker>/TradingAgentsStrategy_logs/.
+    # We honor the config's results_dir (which defaults to SKILL_ROOT/reports/logs)
+    # rather than guessing, so any future path change in default_config.py
+    # is picked up automatically.
+    from tradingagents.default_config import DEFAULT_CONFIG
+    results_dir = Path(DEFAULT_CONFIG.get("results_dir") or (SKILL_ROOT / "reports" / "logs"))
+    log_dir = results_dir / ticker / "TradingAgentsStrategy_logs"
+    today_str = date.today().isoformat()
 
+    # 1) Exact match: today's log for this ticker
+    candidates = list(log_dir.glob(f"full_states_log_{today_str}.json"))
     if candidates:
         return candidates[0]
 
-    # Fallback: most recent log for this ticker
+    # 2) Fallback: most recent log for this ticker (handles clock skew,
+    #    date passed as a different day, or runs started just before midnight)
     candidates = sorted(log_dir.glob("full_states_log_*.json"),
                         key=lambda p: p.stat().st_mtime, reverse=True)
     if candidates:
+        print(f"[stock-analysis] No log for {today_str}; using most recent: {candidates[0].name}",
+              file=sys.stderr)
         return candidates[0]
 
-    raise FileNotFoundError(f"Could not locate saved report for {ticker}")
+    raise FileNotFoundError(
+        f"Could not locate saved report for {ticker} under {log_dir}. "
+        f"Make sure TradingAgents finished writing its log files."
+    )
 
 
 # ---------------------------------------------------------------------------
