@@ -15,6 +15,13 @@ import re
 from datetime import date
 from pathlib import Path
 
+# Load .env file automatically if present in the workspace
+try:
+    from dotenv import load_dotenv, find_dotenv
+    load_dotenv(find_dotenv(usecwd=True))
+except ImportError:
+    pass
+
 # ---------------------------------------------------------------------------
 # Resolve paths relative to this script
 # ---------------------------------------------------------------------------
