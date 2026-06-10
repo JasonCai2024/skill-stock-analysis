@@ -8,6 +8,7 @@ professional Markdown equity research report.
 import sys
 import json
 import os
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -105,19 +106,38 @@ def render_report(json_path: str) -> str:
     if not sentiment_report:
         sentiment_report = "*无相关市场舆情记录。*"
 
-    # Attempt to resolve company name from fundamentals report or stock name
+    # Attempt to resolve company name from fundamentals report or stock name using robust regex patterns
     company_name = "未命名"
-    if "公司名称" in fundamentals_report:
+    
+    # 1) Search for "company_name": "..." (JSON style)
+    m = re.search(r'"company_name"\s*:\s*"([^"]+)"', fundamentals_report, re.IGNORECASE)
+    if m:
+        company_name = m.group(1).strip()
+        
+    # 2) Search for "公司名称：..." (Chinese style)
+    if company_name == "未命名" and "公司名称" in fundamentals_report:
         for line in fundamentals_report.split("\n"):
             if "公司名称" in line:
                 parts = line.split("：")
                 if len(parts) > 1:
                     company_name = parts[1].replace("*", "").strip()
                     break
-    
-    if company_name == "未命名" and "Resolved identity: Company:" in final_trade_decision:
-        # fallback parsing
-        pass
+
+    # 3) Search for 证券代码 `300122.SZ`（智飞生物）
+    if company_name == "未命名":
+        m = re.search(r'证券代码\s*[`\'"]?\d{6}\.(?:SZ|SH|SS|BJ)[`\'"]?（([^）]+)）', fundamentals_report)
+        if m:
+            company_name = m.group(1).strip()
+
+    # 4) Search for 智飞生物（300122.SZ）
+    if company_name == "未命名":
+        m = re.search(r'([^（\s#*]+)（\d{6}\.(?:SZ|SH|SS|BJ)）', fundamentals_report)
+        if m:
+            company_name = m.group(1).strip()
+        else:
+            m = re.search(r'([^（\s#*]+)（\d{6}\.(?:SZ|SH|SS|BJ)）', final_trade_decision)
+            if m:
+                company_name = m.group(1).strip()
 
     # Extract final rating
     final_rating = extract_rating(final_trade_decision)
