@@ -15,6 +15,11 @@ date = sys.argv[2] if len(sys.argv) > 2 else "2026-06-06"
 config = DEFAULT_CONFIG.copy()
 config["checkpoint_enabled"] = False
 
+from tradingagents.dataflows.china.market_detector import detect_market_type, MarketType
+if detect_market_type(ticker) == MarketType.CHINA_A:
+    config["output_language"] = "Chinese"
+
 ta = TradingAgentsGraph(debug=True, config=config)
 _, decision = ta.propagate(ticker, date)
 print(decision)
+

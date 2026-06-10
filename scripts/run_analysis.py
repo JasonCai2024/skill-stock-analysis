@@ -68,10 +68,14 @@ def run_analysis(ticker: str) -> Path:
 
     from tradingagents.graph.trading_graph import TradingAgentsGraph
     from tradingagents.default_config import DEFAULT_CONFIG
+    from tradingagents.dataflows.china.market_detector import detect_market_type, MarketType
 
     today = date.today().isoformat()
     config = DEFAULT_CONFIG.copy()
     config["checkpoint_enabled"] = False
+
+    if detect_market_type(ticker) == MarketType.CHINA_A:
+        config["output_language"] = "Chinese"
 
     print(f"[stock-analysis] Running analysis for {ticker} ({today})...", file=sys.stderr)
 
@@ -122,6 +126,14 @@ def main():
     try:
         ticker = resolve_ticker(identifier)
         report_path = run_analysis(ticker)
+        
+        # Automatically generate the standardized Markdown report next to the JSON log
+        try:
+            from render_report import render_report
+            render_report(str(report_path))
+        except Exception as re_err:
+            print(f"[stock-analysis] Warning: Failed to render markdown report: {re_err}", file=sys.stderr)
+            
         print(report_path)
     except Exception as e:
         print(f"[stock-analysis] Error: {e}", file=sys.stderr)

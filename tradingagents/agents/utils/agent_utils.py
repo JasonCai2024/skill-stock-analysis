@@ -71,6 +71,42 @@ def resolve_instrument_identity(ticker: str) -> dict:
     ticker-only context rather than failing before analysis starts. Cached so
     the lookup happens at most once per ticker per process.
     """
+    from tradingagents.dataflows.china.market_detector import detect_market_type, MarketType
+    
+    market = detect_market_type(ticker)
+    if market == MarketType.CHINA_A:
+        try:
+            from tradingagents.dataflows.china.tushare_financials import _connect_tushare, _get_proxy, _normalize_ts_code
+            api, connected = _connect_tushare()
+            if connected:
+                ts_code = _normalize_ts_code(ticker)
+                proxy = _get_proxy()
+                if proxy:
+                    basic = proxy.stock_basic(ts_code=ts_code)
+                else:
+                    basic = api.stock_basic(ts_code=ts_code, fields="ts_code,symbol,name,area,industry,market,list_date")
+                if basic is not None and not basic.empty:
+                    row = basic.iloc[0]
+                    name = row.get("name")
+                    area = row.get("area")
+                    industry = row.get("industry")
+                    market_segment = row.get("market")
+                    
+                    identity = {}
+                    if name:
+                        identity["company_name"] = name
+                    if industry:
+                        identity["industry"] = industry
+                    if area:
+                        identity["sector"] = area
+                    if market_segment:
+                        identity["exchange"] = market_segment
+                    identity["quote_type"] = "EQUITY"
+                    return identity
+        except Exception as exc:
+            logger.debug("Could not resolve A-share identity for %s via Tushare: %s", ticker, exc)
+        return {}  # Do not fall back to yfinance for A-shares to avoid incorrect mapping/collisions
+
     try:
         info = yf.Ticker(ticker.upper()).info or {}
     except Exception as exc:  # noqa: BLE001 — fail open, never block the run

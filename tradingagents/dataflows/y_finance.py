@@ -260,6 +260,12 @@ def get_fundamentals(
     curr_date: Annotated[str, "current date (not used for yfinance)"] = None
 ):
     """Get company fundamentals overview from yfinance."""
+    from tradingagents.dataflows.china.market_detector import detect_market_type, MarketType
+    market = detect_market_type(ticker)
+    if market == MarketType.CHINA_A:
+        from tradingagents.dataflows.china.tushare_financials import get_tushare_fundamentals
+        return get_tushare_fundamentals(ticker, curr_date)
+
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)

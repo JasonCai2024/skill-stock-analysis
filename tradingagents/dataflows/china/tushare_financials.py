@@ -84,30 +84,38 @@ def _connect_tushare():
         return None, False
 
 
-def _fmt(val) -> str:
+def _fmt(val, unit: str = "yuan") -> str:
     """格式化数值，保留合理精度
 
-    注意：daily_basic 的 total_mv / float_mv 单位是亿元（亿 = 1e8 元）。
-    其他字段通常以元为单位。
+    unit: 'yuan' (元), 'wan' (万元), or 'ratio' (无单位/比例)
     """
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return "N/A"
     try:
         v = float(val)
-        # Tushare daily_basic.total_mv / circ_mv 单位是 万元
-        # 万元数据且 >= 1亿（v >= 1e4 万元 = 1e8 元 = 1亿）→ 转为"XXX亿"显示
-        # 其他字段（revenue/profit 等）单位是 元，>= 1亿（v >= 1e8）→ "XXX亿"
-        if abs(v) >= 1e4:
-            # 万元量级数据（total_mv/circ_mv）：除以 1e4 转亿
-            return f"{v/1e4:.2f}亿"
-        elif abs(v) >= 1e2:
-            # 百元以上数据（pe/pb/ratios）→ 直接显示
-            return f"{v:.2f}"
-        elif abs(v) >= 1:
-            # 小数十以内（ROE%/利润率等）→ 两位小数
-            return f"{v:.2f}"
-        else:
-            return f"{v:.4f}"
+        if unit == "wan":
+            if abs(v) >= 1e4:  # >= 1亿 (1万万元)
+                return f"{v/1e4:.2f}亿"
+            elif abs(v) >= 1:
+                return f"{v:.2f}万"
+            else:
+                return f"{v:.4f}"
+        elif unit == "yuan":
+            if abs(v) >= 1e8:  # >= 1亿
+                return f"{v/1e8:.2f}亿"
+            elif abs(v) >= 1e4:  # >= 1万
+                return f"{v/1e4:.2f}万"
+            elif abs(v) >= 1:
+                return f"{v:.2f}"
+            else:
+                return f"{v:.4f}"
+        else:  # ratio / price / etc.
+            if abs(v) >= 1e2:
+                return f"{v:.2f}"
+            elif abs(v) >= 1:
+                return f"{v:.2f}"
+            else:
+                return f"{v:.4f}"
     except (ValueError, TypeError):
         return str(val)
 
@@ -202,12 +210,13 @@ def get_tushare_fundamentals(
         if valuation:
             lines.append("\n## 估值指标")
             for k, v in valuation.items():
-                lines.append(f"  {k}: {_fmt(v)}")
+                unit = "wan" if "市值" in k else "ratio"
+                lines.append(f"  {k}: {_fmt(v, unit=unit)}")
 
         if fin_summary:
             lines.append("\n## 财务指标（最新季度）")
             for k, v in fin_summary.items():
-                lines.append(f"  {k}: {_fmt(v)}")
+                lines.append(f"  {k}: {_fmt(v, unit='ratio')}")
 
         return "\n".join(lines)
 
@@ -285,7 +294,7 @@ def get_tushare_balance_sheet(
                 continue
             vals = []
             for _, r in df.iterrows():
-                vals.append(_fmt(r.get(eng)))
+                vals.append(_fmt(r.get(eng), unit="yuan"))
             lines.append(f"  {chn:20s} | " + " | ".join(f"{v:>15}" for v in vals) + " |")
 
         return "\n".join(lines)
@@ -352,7 +361,7 @@ def get_tushare_cashflow(
         for eng, chn in key_items.items():
             if eng not in df.columns:
                 continue
-            vals = [_fmt(r.get(eng)) for _, r in df.iterrows()]
+            vals = [_fmt(r.get(eng), unit="yuan") for _, r in df.iterrows()]
             lines.append(f"  {chn:20s} | " + " | ".join(f"{v:>15}" for v in vals) + " |")
 
         return "\n".join(lines)
@@ -425,7 +434,8 @@ def get_tushare_income_statement(
         for eng, chn in key_items.items():
             if eng not in df.columns:
                 continue
-            vals = [_fmt(r.get(eng)) for _, r in df.iterrows()]
+            unit = "ratio" if "eps" in eng else "yuan"
+            vals = [_fmt(r.get(eng), unit=unit) for _, r in df.iterrows()]
             lines.append(f"  {chn:20s} | " + " | ".join(f"{v:>15}" for v in vals) + " |")
 
         return "\n".join(lines)

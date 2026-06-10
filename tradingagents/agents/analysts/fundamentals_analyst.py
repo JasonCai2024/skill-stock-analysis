@@ -56,10 +56,8 @@ def create_fundamentals_analyst(llm):
 
         result = chain.invoke(state["messages"])
 
-        report = ""
-
-        if len(result.tool_calls) == 0:
-            report = result.content
+        existing_report = state.get("fundamentals_report", "") or ""
+        report = result.content if len(result.content) > len(existing_report) else existing_report
 
         return {
             "messages": [result],

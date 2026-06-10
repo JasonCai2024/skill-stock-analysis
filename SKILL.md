@@ -92,11 +92,12 @@ The wrapper script:
 - Resolves company name to ticker (if needed)
 - Calls `TradingAgentsGraph(debug=True).propagate(ticker, today's date)`
 - Saves the full JSON state to `<skill-root>/reports/logs/<ticker>/TradingAgentsStrategy_logs/full_states_log_<date>.json`
+- Automatically calls the report renderer to save a standardized, formatted Markdown report next to the JSON file at `<skill-root>/reports/logs/<ticker>/TradingAgentsStrategy_logs/full_states_log_<date>.md`
 - Prints the JSON report path to stdout
 
 ### Step 3 — Parse and present results
 
-Read the saved JSON and present a clean Chinese summary covering:
+Read the saved standardized Markdown report (`full_states_log_<date>.md`) and present it directly to the user. This ensures the output is comprehensive, follows a solidified structure, and maintains logical consistency. The report strictly contains:
 
 1. **舆情分析** (Sentiment Analyst) — overall_score, key events
 2. **基本面分析** (Fundamentals Analyst) — revenue, ROE, P/E, FCF, key financials

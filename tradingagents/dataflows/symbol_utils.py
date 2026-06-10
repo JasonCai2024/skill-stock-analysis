@@ -120,6 +120,8 @@ def normalize_symbol(raw: str) -> str:
         canonical = f"{s}=X"
     else:
         canonical = s
+        if canonical.endswith(".SH"):
+            canonical = canonical[:-3] + ".SS"
 
     if canonical != raw.strip().upper():
         logger.info("Resolved symbol %r to Yahoo symbol %r", raw, canonical)

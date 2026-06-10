@@ -10,12 +10,13 @@ field is passed through as ``MiniMax-M2.7-highspeed``.
 import os
 import time
 import logging
+import re
 from typing import Optional, Any, List
 
 import httpx
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,167 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+TOOL_SIGNATURES = {
+    "get_fundamentals": ["ticker", "curr_date"],
+    "get_balance_sheet": ["ticker", "freq", "curr_date"],
+    "get_cashflow": ["ticker", "freq", "curr_date"],
+    "get_income_statement": ["ticker", "freq", "curr_date"],
+    "get_news": ["ticker", "start_date", "end_date"],
+    "get_global_news": ["curr_date", "look_back_days", "limit"],
+    "get_insider_transactions": ["ticker"],
+    "get_stock_data": ["symbol", "start_date", "end_date"],
+    "get_indicators": ["symbol", "indicator", "curr_date", "look_back_days"],
+    "get_verified_market_snapshot": ["symbol", "curr_date", "look_back_days"],
+}
+
+def parse_args_string(name: str, args_str: str, current_date_in_prompt: Optional[str] = None) -> dict:
+    args_str = args_str.strip()
+    if not args_str:
+        return {}
+    
+    args = {}
+    if "=" in args_str:
+        try:
+            import ast
+            expr = f"f({args_str})"
+            tree = ast.parse(expr)
+            call = tree.body[0].value
+            
+            # Parse positional arguments based on signature order
+            sig = TOOL_SIGNATURES.get(name, [])
+            for idx, arg_node in enumerate(call.args):
+                if idx < len(sig):
+                    args[sig[idx]] = ast.literal_eval(arg_node)
+            
+            # Parse keyword arguments
+            for kw in call.keywords:
+                args[kw.arg] = ast.literal_eval(kw.value)
+        except Exception:
+            kv_pairs = re.findall(r'(\w+)\s*=\s*(["\'](?:\\.|[^"\'\\])*["\']|\[.*?\]|\S+)', args_str)
+            for k, v in kv_pairs:
+                v = v.rstrip(",")
+                if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                    v = v[1:-1]
+                args[k] = v
+    else:
+        # Positional arguments parsing
+        try:
+            import ast
+            expr = f"[{args_str}]"
+            parts = ast.literal_eval(expr)
+            if not isinstance(parts, list):
+                parts = [parts]
+        except Exception:
+            parts = []
+            pattern = r',(?=(?:[^\'"]*[\'"][^\'"]*[\'"])*[^\'"]*$)'
+            split_parts = re.split(pattern, args_str)
+            for p in split_parts:
+                p = p.strip()
+                if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")):
+                    p = p[1:-1]
+                parts.append(p)
+
+        sig = TOOL_SIGNATURES.get(name, [])
+        for idx, part in enumerate(parts):
+            if idx < len(sig):
+                param_name = sig[idx]
+                if param_name in ("look_back_days", "limit") and isinstance(part, str) and part.isdigit():
+                    args[param_name] = int(part)
+                else:
+                    args[param_name] = part
+
+    # --- Robust Parameter Normalization & Standardization ---
+    sig = TOOL_SIGNATURES.get(name, [])
+    
+    # 1. Normalize ticker / symbol (keys and list values)
+    ticker_keys = ["ticker", "tickers", "symbol", "symbols"]
+    target_ticker_key = None
+    if "symbol" in sig:
+        target_ticker_key = "symbol"
+    elif "ticker" in sig:
+        target_ticker_key = "ticker"
+        
+    if target_ticker_key:
+        found_val = None
+        for k in ticker_keys:
+            if k in args:
+                found_val = args.pop(k)
+                break
+        if found_val is not None:
+            if isinstance(found_val, list):
+                found_val = found_val[0] if found_val else ""
+            args[target_ticker_key] = str(found_val)
+            
+    # 2. Normalize date / curr_date / trade_date / current_date
+    date_keys = ["curr_date", "current_date", "date", "trade_date"]
+    if "curr_date" in sig:
+        found_val = None
+        for k in date_keys:
+            if k in args:
+                found_val = args.pop(k)
+                break
+        if found_val is not None:
+            args["curr_date"] = str(found_val)
+        elif current_date_in_prompt:
+            args["curr_date"] = current_date_in_prompt
+
+    # 3. Normalize start_date / end_date defaults
+    if "start_date" in sig and "start_date" not in args and current_date_in_prompt:
+        try:
+            from datetime import datetime, timedelta
+            dt = datetime.strptime(current_date_in_prompt, "%Y-%m-%d")
+            args["start_date"] = (dt - timedelta(days=30)).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+            
+    if "end_date" in sig and "end_date" not in args and current_date_in_prompt:
+        args["end_date"] = current_date_in_prompt
+
+    # 4. Normalize indicator / indicators (and convert lists to comma-separated string)
+    if "indicator" in sig:
+        found_val = None
+        for k in ["indicator", "indicators"]:
+            if k in args:
+                found_val = args.pop(k)
+                break
+        if found_val is not None:
+            if isinstance(found_val, list):
+                found_val = ",".join(str(item) for item in found_val)
+            args["indicator"] = str(found_val)
+            
+    # 5. Clean up other keys not in signature to prevent validation errors
+    if sig:
+        for k in list(args.keys()):
+            if k not in sig:
+                args.pop(k)
+                
+    # 6. Ensure default integer types for known fields
+    for k in ["look_back_days", "limit"]:
+        if k in args and args[k] is not None:
+            try:
+                args[k] = int(args[k])
+            except ValueError:
+                pass
+
+    return args
+
+def parse_text_tool_calls(text: str, current_date_in_prompt: Optional[str] = None) -> list:
+    pattern = r'(\bget_[a-z_]+)\((.*?)\)'
+    matches = re.finditer(pattern, text)
+    tool_calls = []
+    for match in matches:
+        name = match.group(1)
+        args_str = match.group(2)
+        # Only parse if it's a known tool name
+        if name in TOOL_SIGNATURES:
+            args = parse_args_string(name, args_str, current_date_in_prompt)
+            tool_calls.append({
+                "name": name,
+                "args": args,
+                "id": f"call_{name}_{len(tool_calls)}"
+            })
+    return tool_calls
 
 def _resolve_env(key: str, default: Optional[str] = None) -> Optional[str]:
     return os.environ.get(key, default)
@@ -39,6 +201,9 @@ def _extract_prompt_content(messages: List[BaseMessage]) -> str:
             parts.append(f"[user] {content}")
         elif isinstance(msg, AIMessage):
             parts.append(f"[assistant] {content}")
+        elif isinstance(msg, ToolMessage) or getattr(msg, "type", None) == "tool":
+            name = getattr(msg, "name", "") or "tool"
+            parts.append(f"[user] [Tool Output: {name}]\n{content}")
         else:
             parts.append(str(content))
     return "\n".join(parts)
@@ -157,7 +322,37 @@ class ServiceHubChatModel(BaseChatModel):
         result = data.get("data", {})
         content = result.get("processed_text", "")
 
-        gen = ChatGeneration(message=AIMessage(content=content))
+        # Identify successfully executed tools from history to prevent infinite loops
+        # while allowing retries (on validation error) and sequential tool calls.
+        successful_tools = set()
+        if messages:
+            for msg in messages:
+                if isinstance(msg, ToolMessage) or getattr(msg, "type", None) == "tool":
+                    tool_name = getattr(msg, "name", "")
+                    tool_content = getattr(msg, "content", "") or ""
+                    # A tool run is considered successful if its content doesn't indicate a validation/invocation error
+                    if tool_name and not ("ValidationError" in tool_content or tool_content.startswith("Error:")):
+                        successful_tools.add(tool_name)
+
+        # Extract current date from the prompt/messages to use as default value
+        current_date_in_prompt = None
+        if messages:
+            for msg in messages:
+                if isinstance(msg, SystemMessage) or getattr(msg, "type", None) == "system":
+                    content_str = getattr(msg, "content", "") or ""
+                    match = re.search(r"current date is (\d{4}-\d{2}-\d{2})", content_str)
+                    if match:
+                        current_date_in_prompt = match.group(1)
+                        break
+
+        tool_calls = []
+        parsed_calls = parse_text_tool_calls(content, current_date_in_prompt)
+        for call in parsed_calls:
+            if call["name"] not in successful_tools:
+                tool_calls.append(call)
+
+        message = AIMessage(content=content, tool_calls=tool_calls)
+        gen = ChatGeneration(message=message)
         return ChatResult(generations=[gen])
 
     def bind_tools(self, tools: Any, **kwargs) -> "ServiceHubChatModel":
