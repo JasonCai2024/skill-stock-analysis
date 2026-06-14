@@ -1,5 +1,5 @@
 ---
-name: stock-analysis
+name: skill-stock-analysis
 description: Runs TradingAgents multi-analyst pipeline to produce a BUY/SELL/HOLD equity research report for a Chinese A-share stock. Use when the user asks to analyze a stock price or company, e.g. "请分析华邦健康股价" or "分析002004.SZ"。Supports Chinese company names (auto-resolves to Tushare ticker) and direct ticker codes.
 disable-model-invocation: false
 user-invocable: true
