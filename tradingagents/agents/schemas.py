@@ -22,6 +22,12 @@ from enum import Enum
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
+from tradingagents.dataflows.config import get_config
+
+
+def _is_chinese_output() -> bool:
+    lang = str(get_config().get("output_language", "English") or "English").strip().lower()
+    return lang == "chinese"
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +98,14 @@ class ResearchPlan(BaseModel):
 
 def render_research_plan(plan: ResearchPlan) -> str:
     """Render a ResearchPlan to markdown for storage and the trader's prompt context."""
+    if _is_chinese_output():
+        return "\n".join([
+            f"**投资建议**: {plan.recommendation.value}",
+            "",
+            f"**核心理由**: {plan.rationale}",
+            "",
+            f"**执行动作**: {plan.strategic_actions}",
+        ])
     return "\n".join([
         f"**Recommendation**: {plan.recommendation.value}",
         "",
@@ -145,6 +159,24 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
     preserved for backward compatibility with the analyst stop-signal text
     and any external code that greps for it.
     """
+    if _is_chinese_output():
+        parts = [
+            f"**交易动作**: {proposal.action.value}",
+            "",
+            f"**交易理由**: {proposal.reasoning}",
+        ]
+        if proposal.entry_price is not None:
+            parts.extend(["", f"**入场价格**: {proposal.entry_price}"])
+        if proposal.stop_loss is not None:
+            parts.extend(["", f"**止损价格**: {proposal.stop_loss}"])
+        if proposal.position_sizing:
+            parts.extend(["", f"**仓位建议**: {proposal.position_sizing}"])
+        parts.extend([
+            "",
+            f"FINAL TRANSACTION PROPOSAL: **{proposal.action.value.upper()}**",
+        ])
+        return "\n".join(parts)
+
     parts = [
         f"**Action**: {proposal.action.value}",
         "",
@@ -214,6 +246,20 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     ``**Executive Summary**``, ``**Investment Thesis**``) that downstream
     parsers and the report writers already handle.
     """
+    if _is_chinese_output():
+        parts = [
+            f"**评级**: {decision.rating.value}",
+            "",
+            f"**执行摘要**: {decision.executive_summary}",
+            "",
+            f"**投资逻辑**: {decision.investment_thesis}",
+        ]
+        if decision.price_target is not None:
+            parts.extend(["", f"**目标价格**: {decision.price_target}"])
+        if decision.time_horizon:
+            parts.extend(["", f"**时间周期**: {decision.time_horizon}"])
+        return "\n".join(parts)
+
     parts = [
         f"**Rating**: {decision.rating.value}",
         "",
@@ -308,6 +354,15 @@ def render_sentiment_report(report: SentimentReport) -> str:
     narrative so the saved report is both human-readable and machine-parseable
     without regex.
     """
+    if _is_chinese_output():
+        confidence_map = {"low": "低", "medium": "中", "high": "高"}
+        return "\n".join([
+            f"**整体情绪**: **{report.overall_band.value}** (评分: {report.overall_score:.1f}/10)",
+            f"**置信度**: {confidence_map.get(report.confidence, report.confidence)}",
+            "",
+            report.narrative,
+        ])
+
     return "\n".join([
         f"**Overall Sentiment:** **{report.overall_band.value}** "
         f"(Score: {report.overall_score:.1f}/10)",

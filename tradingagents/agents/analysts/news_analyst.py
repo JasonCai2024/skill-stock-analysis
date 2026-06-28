@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from langchain_core.messages import AIMessage
 
-from tradingagents.agents.utils.agent_utils import get_global_news, get_news
+from tradingagents.agents.utils.agent_utils import get_global_news, get_news, is_chinese_output
 from tradingagents.dataflows.config import get_config
 
 
@@ -25,14 +25,24 @@ def create_news_analyst(llm):
         global_news = get_global_news.func(current_date, look_back_days, limit)
         company_news = get_news.func(ticker, start_date, current_date)
 
-        report = "\n\n".join([
-            f"# Deterministic News Package: {ticker}",
-            "This section is assembled directly from tool outputs. Do not infer events that are not explicitly present below.",
-            "## Global Macro News",
-            global_news,
-            "## Company-specific News",
-            company_news,
-        ])
+        if is_chinese_output():
+            report = "\n\n".join([
+                f"# 确定性新闻数据包: {ticker}",
+                "本节内容直接由工具结果拼装而成。除下方已明确出现的事件外，不补充额外事件推断。",
+                "## 宏观新闻",
+                global_news,
+                "## 个股新闻",
+                company_news,
+            ])
+        else:
+            report = "\n\n".join([
+                f"# Deterministic News Package: {ticker}",
+                "This section is assembled directly from tool outputs. Do not infer events that are not explicitly present below.",
+                "## Global Macro News",
+                global_news,
+                "## Company-specific News",
+                company_news,
+            ])
 
         return {
             "messages": [AIMessage(content=report)],

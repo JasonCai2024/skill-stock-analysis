@@ -1,6 +1,6 @@
 ---
 name: skill-stock-analysis
-description: Runs TradingAgents multi-analyst pipeline to produce a BUY/SELL/HOLD equity research report for a Chinese A-share stock. Use when the user asks to analyze a stock price or company, e.g. "请分析华邦健康股价" or "分析002004.SZ"。Supports Chinese company names (auto-resolves to Tushare ticker) and direct ticker codes.
+description: Runs a TradingAgents multi-analyst pipeline for a Chinese A-share stock and produces a BUY/SELL/HOLD equity research report with explicit investment and trading recommendations. Use when the user clearly asks for investment advice, trading strategy, buy/sell guidance, target price, stop-loss, position guidance, or mentions multi-agent / TradingAgents analysis.
 disable-model-invocation: false
 user-invocable: true
 argument-hint: <company-name-or-ticker>
@@ -10,38 +10,78 @@ argument-hint: <company-name-or-ticker>
 
 ## Goal
 
-Run the TradingAgents quantitative analysis pipeline on a Chinese A-share stock and produce a structured equity research report with a BUY / SELL / HOLD final recommendation, including target price, stop-loss, and risk analysis from four independent analysts.
+Run the TradingAgents analysis pipeline on a Chinese A-share stock and produce a decision-oriented Chinese equity research report with:
+
+1. Final BUY / SELL / HOLD recommendation
+2. Target price
+3. Stop-loss
+4. Suggested holding period
+5. Re-evaluation triggers
+6. Supporting reasoning from multiple analyst roles
 
 ## Scope
 
-Use this skill when the user wants a comprehensive stock analysis report in Chinese. Works for:
-- Chinese company names (e.g. "华邦健康", "望变电气")
-- Direct Tushare-style ticker codes (e.g. "002004.SZ", "603191.SH")
+Use this skill when the user explicitly wants investment or trading advice, for example:
 
-Covers Chinese A-shares only (SSE / SZSE). US stocks and HK stocks are out of scope.
+- whether a stock is worth buying
+- a buy/sell recommendation
+- a trading strategy
+- target price or stop-loss
+- a multi-agent or TradingAgents style decision report
+
+Works for:
+
+- Chinese company names, such as `华邦健康`
+- Direct Tushare-style tickers, such as `002004.SZ`
+
+Covers Chinese A-shares only. US stocks and HK stocks are out of scope.
+
+## Routing Boundary
+
+This is an upper-layer decision skill. It is not the default entry point for generic company analysis.
+
+Route to the lower sibling skill `skill-tushare-servicehub-assistant` instead when the user mainly wants:
+
+1. Company basic situation
+2. Main business analysis
+3. Financial analysis
+4. Market行情 or recent price behavior
+5. Ownership structure
+6. Structured Tushare data, local warehouse data, or JSON
+
+If the request is ambiguous, such as:
+
+- `分析一下某某公司`
+- `了解一下这家公司`
+- `帮我看看这只股票`
+
+do not auto-trigger this skill unless the user clearly asks for investment advice or trading advice.
 
 ## Dependency
 
 This skill depends on the sibling base skill `skill-tushare-servicehub-assistant`.
 
-- Preferred install layout:
-  - `SKILLS-办公技能/skill-stock-analysis`
-  - `SKILLS-办公技能/skill-tushare-servicehub-assistant`
-- Optional override:
-  - set `TUSHARE_SKILL_ROOT=<absolute-path-to-skill-tushare-servicehub-assistant>`
+Preferred install layout:
+
+- `SKILLS-办公技能/skill-stock-analysis`
+- `SKILLS-办公技能/skill-tushare-servicehub-assistant`
+
+Optional override:
+
+- set `TUSHARE_SKILL_ROOT=<absolute-path-to-skill-tushare-servicehub-assistant>`
 
 This upper skill does not call Tushare or ServiceHub directly for market and financial data. It imports the lower skill's stable Python service API and reuses the lower skill's credentials, cache DB, and warehouse DB.
 
 ## Required Credentials
 
-**All A-share data requests are served by the lower base skill. No local Tushare Token is needed in this skill.**
+All A-share data requests are served by the lower base skill. No local Tushare token is needed in this skill.
 
-On first use (or if credentials are not yet set), ask the user for:
+On first use, ask the user for:
 
-- **ServiceHub username** — the account used to log into `https://www.ccailab.top`
-- **ServiceHub passtoken** — the account password on `https://www.ccailab.top`
+1. ServiceHub username
+2. ServiceHub passtoken
 
-Store these as environment variables for the duration of the session:
+Store them as environment variables for the current session:
 
 ```python
 import os
@@ -51,41 +91,47 @@ os.environ["SERVICETUBER_PASSTOKEN"] = "<ask user>"
 os.environ["TRADINGAGENTS_LLM_PROVIDER"] = "servicehub"
 ```
 
-Do not ask the user to edit any files. All configuration is done through the conversation.
+Do not ask the user to edit files.
 
 ## Required Inputs
 
-1. **Stock identifier** — either a Chinese company name or a Tushare ticker code.
-2. **Python environment** — Python 3.11+ with the dependencies in `requirements.txt` installed.
+1. Stock identifier: company name or Tushare ticker
+2. Python 3.11+ with dependencies installed
 
-> **How to find the correct Python on Windows**: run `where python` in PowerShell, or `import sys; print(sys.executable)` in any Python REPL. The skill does NOT hard-code a specific Python install path; pass the interpreter explicitly when running the wrapper.
+First-time setup:
 
-> **First-time setup**: `pip install -r <skill-root>/requirements.txt` once. This installs langgraph, langchain-core, tushare, akshare, yfinance, etc. in the verified set the skill was tested against.
+```bash
+pip install -r <skill-root>/requirements.txt
+```
 
 ## Workflow
 
-### Step 1 — Resolve stock code
+### Step 1: Resolve stock code
 
-If the user provided a company name (Chinese), call the lower skill's stable function `resolve_company()` to look up the exact ticker and reuse its local cache and warehouse. Take the resolved `ts_code` field (for example `002004.SZ`). If the user already provided a ticker, skip this step.
+If the user provided a Chinese company name, call the lower skill's stable function `resolve_company()` to resolve the exact ticker and reuse its local cache and warehouse.
 
-If the search returns no results, try AkShare as fallback. If neither source finds the stock, stop and report failure.
+If the user already provided a ticker, skip this step.
 
-### Step 2 — Run TradingAgents pipeline
+If no result is found, try AkShare as fallback. If neither source finds the stock, stop and report failure.
 
-First, set the credentials as environment variables (so the subprocess inherits them):
+### Step 2: Run TradingAgents pipeline
+
+Set runtime environment variables first:
 
 ```python
-import os, subprocess
+import os
 os.environ["SERVICETUBER_BASE_URL"] = "https://www.ccailab.top"
 os.environ["SERVICETUBER_USERNAME"] = "<from user>"
 os.environ["SERVICETUBER_PASSTOKEN"] = "<from user>"
 os.environ["TRADINGAGENTS_LLM_PROVIDER"] = "servicehub"
 ```
 
-Then execute the wrapper script using whichever Python the user has:
+Then run:
 
 ```python
+import subprocess
 import sys
+
 subprocess.run(
     [sys.executable, "<skill-root>/scripts/run_analysis.py", "<ticker-or-company-name>"],
     check=True,
@@ -93,70 +139,51 @@ subprocess.run(
 ```
 
 The wrapper script:
-- Imports the lower skill via `tushare_dependency.py`
-- Resolves company name to ticker through the lower skill's stable API
-- Calls `TradingAgentsGraph(debug=True).propagate(ticker, today's date)`
-- Saves the full JSON state to `<skill-root>/reports/logs/<ticker>/TradingAgentsStrategy_logs/full_states_log_<date>.json`
-- Automatically calls the report renderer to save a standardized, formatted Markdown report next to the JSON file at `<skill-root>/reports/logs/<ticker>/TradingAgentsStrategy_logs/full_states_log_<date>.md`
-- Prints the JSON report path to stdout
 
-### Step 3 — Parse and present results
+1. Imports the lower skill through `tushare_dependency.py`
+2. Resolves company name to ticker through the lower skill's API
+3. Runs the TradingAgents graph
+4. Saves the full JSON state under `reports/logs/<ticker>/TradingAgentsStrategy_logs/`
+5. Renders a standardized Markdown report next to the JSON file
 
-Read the saved standardized Markdown report (`full_states_log_<date>.md`) and present it directly to the user. This ensures the output is comprehensive, follows a solidified structure, and maintains logical consistency. The report strictly contains:
+### Step 3: Present results
 
-1. **舆情分析** (Sentiment Analyst) — overall_score, key events
-2. **基本面分析** (Fundamentals Analyst) — revenue, ROE, P/E, FCF, key financials
-3. **交易员决策** (Trader) — BUY / SELL / HOLD with key reasoning
-4. **最终裁定** (Portfolio Manager) — final recommendation, target price, stop-loss, holding period, re-evaluation triggers
+Read the generated Markdown report and present it to the user. The output should include analyst conclusions and the final trading recommendation.
 
 ## Decision Rules
 
-1. If the user gives a company name, resolve to ticker first — never guess.
-2. If Tushare search finds multiple results, ask the user to pick the correct one.
-3. If the JSON report file exists from a prior run (same ticker, same date), reuse it instead of re-running to save cost.
-4. LLM calls inside TradingAgents go through ServiceHub — no local API key needed.
-5. Each full run costs multiple ServiceHub LLM calls (~4+ analysts × multiple rounds). Warn the user if this is a fresh run and costs are a concern.
+1. Resolve company name to ticker first. Never guess.
+2. If multiple stock matches are found, ask the user to choose.
+3. If the same ticker already has a report for the same date, reuse it when appropriate.
+4. LLM calls inside TradingAgents go through ServiceHub.
+5. A fresh run can consume multiple ServiceHub calls. Warn the user when cost matters.
+6. This skill should only be selected when the user's goal is clearly decision-oriented.
+7. Generic company analysis should default to the lower sibling skill.
 
 ## Output Requirements
 
 Return a clean Chinese report including:
 
-- Company name and ticker
-- **`data_as_of`** — the actual cutoff date of the underlying data (read from the JSON's `trade_date` / `date` fields; do NOT trust any date the LLM invents in its prose)
-- `report_date` — today, when this analysis was run
-- Each analyst's conclusion
-- Final recommendation: BUY / SELL / HOLD
-- Target price (CNY)
-- Stop-loss price (CNY)
-- Holding period
-- Re-evaluation triggers
-- Path to the saved JSON report
+1. Company name and ticker
+2. `data_as_of`
+3. `report_date`
+4. Each analyst's conclusion
+5. Final recommendation: BUY / SELL / HOLD
+6. Target price
+7. Stop-loss price
+8. Holding period
+9. Re-evaluation triggers
+10. Saved JSON report path
 
-> **Why `data_as_of` matters**: TradingAgents may query data with a delay (latest business day, or last few weeks if a holiday), and the LLM can fabricate dates in its narrative. Always cross-reference with the JSON's `trade_date` and surface it explicitly so the user can see what data the report is actually based on.
+Always derive `data_as_of` from the underlying JSON state rather than trusting narrative prose.
 
 ## Fallback
 
-If the wrapper script is unavailable, set env vars and run directly:
-
-```python
-import os, sys
-os.environ["SERVICETUBER_BASE_URL"] = "https://www.ccailab.top"
-os.environ["SERVICETUBER_USERNAME"] = "<ask user>"
-os.environ["SERVICETUBER_PASSTOKEN"] = "<ask user>"
-os.environ["TRADINGAGENTS_LLM_PROVIDER"] = "servicehub"
-```
-
-```python
-import subprocess
-subprocess.run([sys.executable, "<skill-root>/main.py", "<ticker>"], check=True)
-```
-
-The report is saved at:
-`<skill-root>/reports/logs/<ticker>/TradingAgentsStrategy_logs/full_states_log_<date>.json`
+If the wrapper is unavailable, run the skill directly through `main.py` with the same environment variables.
 
 ## Examples
 
-- "请分析华邦健康的股价"
-- "分析一下002004.SZ"
-- "望变电气最近值得买吗"
-- "帮我看看603191.SH"
+- `请给我一份华邦健康的投资建议`
+- `分析002004.SZ，给出买卖建议和止损位`
+- `望变电气最近值不值得买`
+- `帮我用多智能体框架分析603191.SH，并给出交易策略`

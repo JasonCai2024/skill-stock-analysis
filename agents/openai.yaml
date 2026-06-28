@@ -1,0 +1,6 @@
+display_name: Stock Analysis 决策助手
+short_description: 使用 TradingAgents 生成投资建议、交易策略和决策型研报
+default_prompt: >-
+  帮我用 TradingAgents 分析一只 A 股股票，并给出面向投资动作的结论。
+  如果我的需求是投资建议、买卖建议、交易策略、目标价、止损位、仓位建议或多智能体决策分析，请按这个技能处理。
+  如果我只是想了解公司的基本情况、经营、财务、行情或股权结构，则应改用下层 TuShare ServiceHub 技能。

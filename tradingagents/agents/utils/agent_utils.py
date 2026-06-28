@@ -38,6 +38,17 @@ if str(SKILL_ROOT) not in sys.path:
 from tushare_dependency import load_tushare_service
 
 
+def get_output_language() -> str:
+    from tradingagents.dataflows.config import get_config
+
+    lang = str(get_config().get("output_language", "English") or "English").strip()
+    return lang or "English"
+
+
+def is_chinese_output() -> bool:
+    return get_output_language().lower() == "chinese"
+
+
 def get_language_instruction() -> str:
     """Return a prompt instruction for the configured output language.
 
@@ -47,11 +58,14 @@ def get_language_instruction() -> str:
     portfolio manager — so a non-English run produces a fully localized
     report rather than a mix of languages.
     """
-    from tradingagents.dataflows.config import get_config
-    lang = get_config().get("output_language", "English")
-    if lang.strip().lower() == "english":
+    lang = get_output_language()
+    if lang.lower() == "english":
         return ""
-    return f" Write your entire response in {lang}."
+    return (
+        f" IMPORTANT: You must write your entire response in {lang}. "
+        "This includes all section headers, bullet points, tables, labels, and narrative text. "
+        "Do not output any explanatory prose in English unless a raw tool result is already in English."
+    )
 
 
 def get_evidence_guardrails() -> str:
