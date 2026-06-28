@@ -20,9 +20,21 @@ Use this skill when the user wants a comprehensive stock analysis report in Chin
 
 Covers Chinese A-shares only (SSE / SZSE). US stocks and HK stocks are out of scope.
 
+## Dependency
+
+This skill depends on the sibling base skill `skill-tushare-servicehub-assistant`.
+
+- Preferred install layout:
+  - `SKILLS-办公技能/skill-stock-analysis`
+  - `SKILLS-办公技能/skill-tushare-servicehub-assistant`
+- Optional override:
+  - set `TUSHARE_SKILL_ROOT=<absolute-path-to-skill-tushare-servicehub-assistant>`
+
+This upper skill does not call Tushare or ServiceHub directly for market and financial data. It imports the lower skill's stable Python service API and reuses the lower skill's credentials, cache DB, and warehouse DB.
+
 ## Required Credentials
 
-**All requests route through ServiceHub. No Tushare Token or MiniMax API Key is needed.**
+**All A-share data requests are served by the lower base skill. No local Tushare Token is needed in this skill.**
 
 On first use (or if credentials are not yet set), ask the user for:
 
@@ -54,14 +66,7 @@ Do not ask the user to edit any files. All configuration is done through the con
 
 ### Step 1 — Resolve stock code
 
-If the user provided a company name (Chinese), use the ServiceHub Tushare proxy to look up the exact ticker:
-
-```
-POST <SERVICETUBER_BASE_URL>/api/tushare/query
-body: {api_name: "stock_basic", params: {name: "<company-name>", list_status: "L"}}
-```
-
-Take the first result's `ts_code` field (e.g. `002004.SZ`). If the user already provided a ticker, skip this step.
+If the user provided a company name (Chinese), call the lower skill's stable function `resolve_company()` to look up the exact ticker and reuse its local cache and warehouse. Take the resolved `ts_code` field (for example `002004.SZ`). If the user already provided a ticker, skip this step.
 
 If the search returns no results, try AkShare as fallback. If neither source finds the stock, stop and report failure.
 
@@ -88,8 +93,8 @@ subprocess.run(
 ```
 
 The wrapper script:
-- Uses `SERVICETUBER_*` environment variables set above
-- Resolves company name to ticker (if needed)
+- Imports the lower skill via `tushare_dependency.py`
+- Resolves company name to ticker through the lower skill's stable API
 - Calls `TradingAgentsGraph(debug=True).propagate(ticker, today's date)`
 - Saves the full JSON state to `<skill-root>/reports/logs/<ticker>/TradingAgentsStrategy_logs/full_states_log_<date>.json`
 - Automatically calls the report renderer to save a standardized, formatted Markdown report next to the JSON file at `<skill-root>/reports/logs/<ticker>/TradingAgentsStrategy_logs/full_states_log_<date>.md`

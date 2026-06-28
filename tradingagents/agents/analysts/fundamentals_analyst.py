@@ -1,66 +1,50 @@
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import AIMessage
+
 from tradingagents.agents.utils.agent_utils import (
-    get_instrument_context_from_state,
     get_balance_sheet,
     get_cashflow,
     get_fundamentals,
     get_income_statement,
-    get_insider_transactions,
-    get_language_instruction,
 )
-from tradingagents.dataflows.config import get_config
+
+
+def _call_tool(tool_obj, *args):
+    """Call a LangChain tool's underlying Python function directly."""
+    return tool_obj.func(*args)
+
+
+def _section(title: str, body: str) -> str:
+    text = (body or "").strip()
+    if not text:
+        text = "NO_DATA_AVAILABLE"
+    return f"## {title}\n\n{text}"
 
 
 def create_fundamentals_analyst(llm):
+    del llm
+
     def fundamentals_analyst_node(state):
+        ticker = state["company_of_interest"]
         current_date = state["trade_date"]
-        instrument_context = get_instrument_context_from_state(state)
 
-        tools = [
-            get_fundamentals,
-            get_balance_sheet,
-            get_cashflow,
-            get_income_statement,
-        ]
+        fundamentals = _call_tool(get_fundamentals, ticker, current_date)
+        income_statement = _call_tool(get_income_statement, ticker, "quarterly", current_date)
+        balance_sheet = _call_tool(get_balance_sheet, ticker, "quarterly", current_date)
+        cashflow = _call_tool(get_cashflow, ticker, "quarterly", current_date)
 
-        system_message = (
-            "You are a researcher tasked with analyzing fundamental information over the past week about a company. Please write a comprehensive report of the company's fundamental information such as financial documents, company profile, basic company financials, and company financial history to gain a full view of the company's fundamental information to inform traders. Make sure to include as much detail as possible. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
-            + " Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."
-            + " Use the available tools: `get_fundamentals` for comprehensive company analysis, `get_balance_sheet`, `get_cashflow`, and `get_income_statement` for specific financial statements."
-            + get_language_instruction(),
-        )
-
-        prompt = ChatPromptTemplate.from_messages(
+        report = "\n\n".join(
             [
-                (
-                    "system",
-                    "You are a helpful AI assistant, collaborating with other assistants."
-                    " Use the provided tools to progress towards answering the question."
-                    " If you are unable to fully answer, that's OK; another assistant with different tools"
-                    " will help where you left off. Execute what you can to make progress."
-                    " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
-                    " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
-                    " You have access to the following tools: {tool_names}.\n{system_message}"
-                    "For your reference, the current date is {current_date}. {instrument_context}",
-                ),
-                MessagesPlaceholder(variable_name="messages"),
+                f"# Deterministic Fundamentals Package: {ticker}",
+                "This section is assembled directly from tool outputs. Do not infer values that are not explicitly present below.",
+                _section("Company Fundamentals", fundamentals),
+                _section("Income Statement", income_statement),
+                _section("Balance Sheet", balance_sheet),
+                _section("Cashflow", cashflow),
             ]
         )
 
-        prompt = prompt.partial(system_message=system_message)
-        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
-        prompt = prompt.partial(current_date=current_date)
-        prompt = prompt.partial(instrument_context=instrument_context)
-
-        chain = prompt | llm.bind_tools(tools)
-
-        result = chain.invoke(state["messages"])
-
-        existing_report = state.get("fundamentals_report", "") or ""
-        report = result.content if len(result.content) > len(existing_report) else existing_report
-
         return {
-            "messages": [result],
+            "messages": [AIMessage(content=report)],
             "fundamentals_report": report,
         }
 

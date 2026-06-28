@@ -1,5 +1,7 @@
 import time
 import logging
+from pathlib import Path
+import sys
 
 import pandas as pd
 import yfinance as yf
@@ -10,8 +12,15 @@ import os
 from .config import get_config
 from .utils import safe_ticker_component
 from .symbol_utils import normalize_symbol, NoMarketDataError
+from .china.market_detector import detect_market_type, MarketType
 
 logger = logging.getLogger(__name__)
+
+SKILL_ROOT = Path(__file__).resolve().parents[2]
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
+
+from tushare_dependency import load_tushare_service
 
 
 def yf_retry(func, max_retries=3, base_delay=2.0):
@@ -51,14 +60,78 @@ def _ensure_date_column(data: pd.DataFrame) -> pd.DataFrame:
 def _clean_dataframe(data: pd.DataFrame) -> pd.DataFrame:
     """Normalize a stock DataFrame for stockstats: parse dates, drop invalid rows, fill price gaps."""
     data = _ensure_date_column(data)
-    data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
+    raw_dates = data["Date"]
+    raw_as_str = raw_dates.astype(str).str.strip()
+    eight_digit_mask = raw_as_str.str.fullmatch(r"\d{8}")
+    parsed_dates = pd.to_datetime(raw_dates, errors="coerce")
+    if eight_digit_mask.any():
+        parsed_dates.loc[eight_digit_mask] = pd.to_datetime(
+            raw_as_str.loc[eight_digit_mask],
+            format="%Y%m%d",
+            errors="coerce",
+        )
+    data["Date"] = parsed_dates
     data = data.dropna(subset=["Date"])
 
     price_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in data.columns]
     data[price_cols] = data[price_cols].apply(pd.to_numeric, errors="coerce")
     data = data.dropna(subset=["Close"])
     data[price_cols] = data[price_cols].ffill().bfill()
+    data = data.sort_values("Date").reset_index(drop=True)
 
+    return data
+
+
+def _load_a_share_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
+    """Load A-share OHLCV data from the lower Tushare base skill."""
+    config = get_config()
+    curr_date_dt = pd.to_datetime(curr_date)
+    start_date = curr_date_dt - pd.DateOffset(years=5)
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = curr_date_dt.strftime("%Y-%m-%d")
+    safe_symbol = safe_ticker_component(symbol.upper())
+
+    os.makedirs(config["data_cache_dir"], exist_ok=True)
+    data_file = os.path.join(
+        config["data_cache_dir"],
+        f"{safe_symbol}-Tushare-data-{start_str}-{end_str}.csv",
+    )
+
+    data = None
+    if os.path.exists(data_file):
+        cached = pd.read_csv(data_file, on_bad_lines="skip", encoding="utf-8")
+        if not cached.empty and "Close" in cached.columns:
+            data = cached
+
+    if data is None:
+        service = load_tushare_service()
+        bundle = service.get_market_bundle(
+            symbol,
+            start_date=start_str.replace("-", ""),
+            end_date=end_str.replace("-", ""),
+            limit=2000,
+        )
+        rows = bundle.get("market_daily", [])
+        if not rows:
+            raise NoMarketDataError(symbol, symbol.upper(), "Tushare base skill returned no rows")
+
+        data = pd.DataFrame(rows).rename(
+            columns={
+                "trade_date": "Date",
+                "open": "Open",
+                "high": "High",
+                "low": "Low",
+                "close": "Close",
+                "vol": "Volume",
+                "amount": "Amount",
+            }
+        )
+        if data.empty or "Close" not in data.columns:
+            raise NoMarketDataError(symbol, symbol.upper(), "Tushare base skill returned no usable OHLCV rows")
+        data.to_csv(data_file, index=False, encoding="utf-8")
+
+    data = _clean_dataframe(data)
+    data = data[data["Date"] <= curr_date_dt]
     return data
 
 
@@ -72,6 +145,9 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     # Resolve broker/forex symbols (XAUUSD+ -> GC=F) to Yahoo's convention,
     # then reject values that would escape the cache directory when
     # interpolated into the cache filename (e.g. ``../../tmp/x``).
+    if detect_market_type(symbol) == MarketType.CHINA_A:
+        return _load_a_share_ohlcv(symbol, curr_date)
+
     canonical = normalize_symbol(symbol)
     safe_symbol = safe_ticker_component(canonical)
 

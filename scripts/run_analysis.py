@@ -4,78 +4,57 @@ TradingAgents stock analysis wrapper for skill-stock-analysis.
 Usage:
     python run_analysis.py <ticker-or-company-name>
 
-The skill is fully self-contained. No Tushare Token is needed —
-all Tushare calls (including stock_basic for company name search)
-go through the ServiceHub proxy.
+This wrapper depends on the sibling skill
+``skill-tushare-servicehub-assistant`` for company resolution and all
+Tushare/ServiceHub data access.
 """
 
-import sys
-import os
+from __future__ import annotations
+
 import re
+import sys
 from datetime import date
 from pathlib import Path
 
-# Load .env file automatically if present in the workspace
 try:
-    from dotenv import load_dotenv, find_dotenv
+    from dotenv import find_dotenv, load_dotenv
+
     load_dotenv(find_dotenv(usecwd=True))
 except ImportError:
     pass
 
-# ---------------------------------------------------------------------------
-# Resolve paths relative to this script
-# ---------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_ROOT = SCRIPT_DIR.parent
-TRADINGAGENTS_ROOT = SKILL_ROOT / "tradingagents"
 
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
 
-# ---------------------------------------------------------------------------
-# Resolve ticker from company name (via ServiceHub Tushare proxy)
-# ---------------------------------------------------------------------------
+from tushare_dependency import load_tushare_service
+
 
 def resolve_ticker(name_or_ticker: str) -> str:
-    """Return ticker if already in Tushare format, otherwise search by name."""
-    name_or_ticker = name_or_ticker.strip()
+    """Return ticker if already normalized, otherwise resolve by company."""
+    identifier = name_or_ticker.strip()
 
-    # Already a Tushare ticker?
-    if re.match(r"^\d{6}\.(SZ|SS|SH|HK)$", name_or_ticker, re.IGNORECASE):
-        return name_or_ticker.upper()
+    if re.match(r"^\d{6}\.(SZ|SS|SH|HK|BJ)$", identifier, re.IGNORECASE):
+        return identifier.upper()
 
-    # Search via ServiceHub Tushare proxy (no local Tushare Token needed)
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-    from servicehub_tushare_client import ServiceHubTushareClient
-    client = ServiceHubTushareClient()
-
-    ok, ticker, extra = client.search_stock(name_or_ticker)
-    if not ok:
-        raise ValueError(f"ServiceHub Tushare search failed for '{name_or_ticker}': {ticker}")
-
-    if extra == "no results":
-        raise ValueError(f"No Tushare results for '{name_or_ticker}'")
-
-    if extra == "multiple":
-        print(f"[stock-analysis] Multiple matches for '{name_or_ticker}' — using first result: {ticker}", file=sys.stderr)
-    else:
-        print(f"[stock-analysis] '{name_or_ticker}' → {ticker}", file=sys.stderr)
-
+    service = load_tushare_service()
+    resolved = service.resolve_company(identifier)
+    company = resolved["company"]
+    ticker = str(company["ts_code"]).upper()
+    print(f"[stock-analysis] '{identifier}' -> {ticker}", file=sys.stderr)
     return ticker
 
 
-# ---------------------------------------------------------------------------
-# Run TradingAgents pipeline
-# ---------------------------------------------------------------------------
-
 def run_analysis(ticker: str) -> Path:
-    """Run TradingAgents and return path to saved JSON report."""
-    # Insert SKILL_ROOT (parent of tradingagents/), not TRADINGAGENTS_ROOT,
-    # so 'import tradingagents' finds the skill's copy first.
-    sys.path.insert(0, str(SKILL_ROOT))
+    """Run TradingAgents and return the saved JSON report path."""
+    if str(SKILL_ROOT) not in sys.path:
+        sys.path.insert(0, str(SKILL_ROOT))
 
-    from tradingagents.graph.trading_graph import TradingAgentsGraph
     from tradingagents.default_config import DEFAULT_CONFIG
-    from tradingagents.dataflows.china.market_detector import detect_market_type, MarketType
+    from tradingagents.dataflows.china.market_detector import MarketType, detect_market_type
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
 
     today = date.today().isoformat()
     config = DEFAULT_CONFIG.copy()
@@ -89,41 +68,33 @@ def run_analysis(ticker: str) -> Path:
     ta = TradingAgentsGraph(debug=True, config=config)
     ta.propagate(ticker, today)
 
-    # Locate the saved JSON report.
-    # TradingAgents writes logs to <results_dir>/<ticker>/TradingAgentsStrategy_logs/.
-    # We honor the config's results_dir (which defaults to SKILL_ROOT/reports/logs)
-    # rather than guessing, so any future path change in default_config.py
-    # is picked up automatically.
-    from tradingagents.default_config import DEFAULT_CONFIG
     results_dir = Path(DEFAULT_CONFIG.get("results_dir") or (SKILL_ROOT / "reports" / "logs"))
     log_dir = results_dir / ticker / "TradingAgentsStrategy_logs"
     today_str = date.today().isoformat()
 
-    # 1) Exact match: today's log for this ticker
     candidates = list(log_dir.glob(f"full_states_log_{today_str}.json"))
     if candidates:
         return candidates[0]
 
-    # 2) Fallback: most recent log for this ticker (handles clock skew,
-    #    date passed as a different day, or runs started just before midnight)
-    candidates = sorted(log_dir.glob("full_states_log_*.json"),
-                        key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates = sorted(
+        log_dir.glob("full_states_log_*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
     if candidates:
-        print(f"[stock-analysis] No log for {today_str}; using most recent: {candidates[0].name}",
-              file=sys.stderr)
+        print(
+            f"[stock-analysis] No log for {today_str}; using most recent: {candidates[0].name}",
+            file=sys.stderr,
+        )
         return candidates[0]
 
     raise FileNotFoundError(
         f"Could not locate saved report for {ticker} under {log_dir}. "
-        f"Make sure TradingAgents finished writing its log files."
+        "Make sure TradingAgents finished writing its log files."
     )
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def main():
+def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: python run_analysis.py <ticker-or-company-name>", file=sys.stderr)
         sys.exit(1)
@@ -133,17 +104,19 @@ def main():
     try:
         ticker = resolve_ticker(identifier)
         report_path = run_analysis(ticker)
-        
-        # Automatically generate the standardized Markdown report next to the JSON log
         try:
             from render_report import render_report
+
             render_report(str(report_path))
-        except Exception as re_err:
-            print(f"[stock-analysis] Warning: Failed to render markdown report: {re_err}", file=sys.stderr)
-            
+        except Exception as render_error:
+            print(
+                f"[stock-analysis] Warning: Failed to render markdown report: {render_error}",
+                file=sys.stderr,
+            )
+
         print(report_path)
-    except Exception as e:
-        print(f"[stock-analysis] Error: {e}", file=sys.stderr)
+    except Exception as exc:
+        print(f"[stock-analysis] Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
 

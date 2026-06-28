@@ -1,6 +1,8 @@
 import functools
 import logging
 from typing import Any, Mapping, Optional
+from pathlib import Path
+import sys
 
 import yfinance as yf
 from langchain_core.messages import HumanMessage, RemoveMessage
@@ -29,6 +31,12 @@ from tradingagents.agents.utils.market_data_validation_tools import (
 
 logger = logging.getLogger(__name__)
 
+SKILL_ROOT = Path(__file__).resolve().parents[3]
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
+
+from tushare_dependency import load_tushare_service
+
 
 def get_language_instruction() -> str:
     """Return a prompt instruction for the configured output language.
@@ -44,6 +52,18 @@ def get_language_instruction() -> str:
     if lang.strip().lower() == "english":
         return ""
     return f" Write your entire response in {lang}."
+
+
+def get_evidence_guardrails() -> str:
+    """Prompt guardrails that forbid unsupported factual invention."""
+    return (
+        " Evidence discipline rules: "
+        "1. Only use facts, numbers, dates, ratios, business descriptions, and signals that are explicitly present in the provided reports or tool outputs. "
+        "2. If a fact is missing, say it is unknown or not provided; do not estimate or fill gaps. "
+        "3. Do not invent customer concentration, restricted cash, market share, policy subsidies, orders, product launches, margin trends, institutional behavior, or valuation targets unless explicitly stated in the provided material. "
+        "4. If different reports conflict, call out the conflict explicitly and prefer the deterministic report sections over narrative speculation. "
+        "5. When making a recommendation, tie it to the evidence that is actually present and avoid adding new unsupported reasoning."
+    )
 
 
 def _clean_identity_value(value: Any) -> Optional[str]:
@@ -76,33 +96,21 @@ def resolve_instrument_identity(ticker: str) -> dict:
     market = detect_market_type(ticker)
     if market == MarketType.CHINA_A:
         try:
-            from tradingagents.dataflows.china.tushare_financials import _connect_tushare, _get_proxy, _normalize_ts_code
-            api, connected = _connect_tushare()
-            if connected:
-                ts_code = _normalize_ts_code(ticker)
-                proxy = _get_proxy()
-                if proxy:
-                    basic = proxy.stock_basic(ts_code=ts_code)
-                else:
-                    basic = api.stock_basic(ts_code=ts_code, fields="ts_code,symbol,name,area,industry,market,list_date")
-                if basic is not None and not basic.empty:
-                    row = basic.iloc[0]
-                    name = row.get("name")
-                    area = row.get("area")
-                    industry = row.get("industry")
-                    market_segment = row.get("market")
-                    
-                    identity = {}
-                    if name:
-                        identity["company_name"] = name
-                    if industry:
-                        identity["industry"] = industry
-                    if area:
-                        identity["sector"] = area
-                    if market_segment:
-                        identity["exchange"] = market_segment
-                    identity["quote_type"] = "EQUITY"
-                    return identity
+            service = load_tushare_service()
+            profile = service.get_company_profile(ticker)
+            company = profile.get("company", {})
+            identity = {}
+            if company.get("name"):
+                identity["company_name"] = company["name"]
+            if company.get("industry"):
+                identity["industry"] = company["industry"]
+            if company.get("area"):
+                identity["sector"] = company["area"]
+            if company.get("market"):
+                identity["exchange"] = company["market"]
+            if identity:
+                identity["quote_type"] = "EQUITY"
+                return identity
         except Exception as exc:
             logger.debug("Could not resolve A-share identity for %s via Tushare: %s", ticker, exc)
         return {}  # Do not fall back to yfinance for A-shares to avoid incorrect mapping/collisions
